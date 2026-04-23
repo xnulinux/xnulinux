@@ -97,50 +97,6 @@ static void start_networking(void) {
 	spawn_detached("/sbin/dhclient", dh_args);
 }
 
-// Generate fresh host keys (the squashfs ships with them removed so
-// every boot gets unique keys) and start sshd. We run sshd in the
-// foreground (-D) with logging to stderr (-e), redirecting stderr to
-// /dev/console so any startup failure is visible — the alternative is
-// silent death with no logs, which is what we hit on the first boot.
-// TODO: switch to Darwin's openssh in the prefix once the networking
-// syscall translation supports it.
-static void start_sshd(void) {
-	char *keygen_args[] = {"ssh-keygen", "-A", NULL};
-	pid_t k = fork();
-	if (k == 0) {
-		execv("/usr/bin/ssh-keygen", keygen_args);
-		_exit(127);
-	}
-	if (k > 0) waitpid(k, NULL, 0);
-
-	if (mkdir("/run/sshd", 0755) != 0 && errno != EEXIST) {
-		say("mkdir /run/sshd failed\n");
-	}
-
-	pid_t sp = fork();
-	if (sp == 0) {
-		// stderr → /var/log/xnulinux-sshd.log so it survives console scroll.
-		// Visible from inside darling shell as
-		//   /Volumes/SystemRoot/var/log/xnulinux-sshd.log
-		(void)mkdir("/var/log", 0755);
-		int fd = open("/var/log/xnulinux-sshd.log",
-			      O_WRONLY | O_CREAT | O_APPEND, 0644);
-		if (fd >= 0) {
-			(void)dup2(fd, 1);
-			(void)dup2(fd, 2);
-			if (fd > 2) (void)close(fd);
-		}
-		// argv[0] must be the absolute path: sshd re-execs itself for
-		// privilege separation and uses argv[0] for the re-exec; if it's
-		// just the basename, sshd aborts with "re-exec requires execution
-		// with an absolute path".
-		char *sshd_args[] = {"/usr/sbin/sshd", "-D", "-e", NULL};
-		execv("/usr/sbin/sshd", sshd_args);
-		say("exec /usr/sbin/sshd failed\n");
-		_exit(127);
-	}
-}
-
 int main(void) {
 	setup_filesystems();
 	redirect_to_console();
@@ -163,12 +119,8 @@ int main(void) {
 	signal(SIGCHLD, SIG_DFL);
 
 	start_networking();
-	// Linux sshd is no longer auto-started — we want Darwin's sshd (run
-	// from launchd inside the prefix) to own SSH. Linux sshd is still
-	// installed in the rootfs as a fallback; start it manually with
-	//   chroot /Volumes/SystemRoot /usr/sbin/sshd -D -e
-	// from inside darling shell if you need network access while the
-	// Darwin side isn't working yet.
+	// SSH is owned by Darwin (Apple's sshd via launchd inside the
+	// Darling prefix). The Linux side ships no sshd at all.
 
 	for (;;) {
 		pid_t pid = fork();

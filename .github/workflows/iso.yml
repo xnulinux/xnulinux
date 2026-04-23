@@ -56,12 +56,12 @@ jobs:
           # Pinned to bookworm: trixie's t64 transition renamed libfuse2/
           # libelf1 to libfuse2t64/libelf1t64; bookworm keeps the simpler
           # names. Debian uses linux-image-amd64, not Ubuntu's *-generic.
-          # SSH + DHCP added pragmatically so the VM is reachable from
-          # the network. They're Linux userland — long-term plan is to
-          # migrate networking to Darwin (configd / ipconfig) and SSH to
-          # Darwin's openssh, but that needs syscall-translation work.
+          # DHCP stays Linux-side for now (init runs dhclient); SSH is
+          # Darwin-only via Apple's openssh in the Darling prefix.
+          # TODO: migrate networking to Darwin (configd / ipconfig) once
+          # the network ioctl translation supports it.
           sudo debootstrap --variant=minbase \
-            --include=systemd-sysv,init,linux-image-amd64,live-boot,squashfs-tools,ca-certificates,libfuse2,libudev1,libbsd0,libdbus-1-3,libxml2,libcap2,xdg-user-dirs,iproute2,isc-dhcp-client,openssh-server \
+            --include=systemd-sysv,init,linux-image-amd64,live-boot,squashfs-tools,ca-certificates,libfuse2,libudev1,libbsd0,libdbus-1-3,libxml2,libcap2,xdg-user-dirs,iproute2,isc-dhcp-client \
             --components=main \
             bookworm rootfs http://deb.debian.org/debian
 
@@ -78,34 +78,6 @@ jobs:
           # never run — the kernel exec()s whatever is at /sbin/init.
           sudo install -m 0755 init/init rootfs/sbin/init
           echo "xnulinux" | sudo tee rootfs/etc/hostname
-          echo "root:root" | sudo chroot rootfs chpasswd
-
-          # SSH: allow root login w/ password. Remove host keys from
-          # squashfs so init's ssh-keygen -A produces fresh keys per boot.
-          sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' rootfs/etc/ssh/sshd_config
-          sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' rootfs/etc/ssh/sshd_config
-          sudo rm -f rootfs/etc/ssh/ssh_host_*
-
-          # openssh-server's postinst is inconsistent about creating the
-          # sshd privsep user inside debootstrap's chroot — sometimes it
-          # works, sometimes it silently fails. If it failed, sshd aborts
-          # with "Privilege separation user sshd does not exist". Add the
-          # user idempotently.
-          sudo chroot rootfs sh -c 'id -u sshd >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /run/sshd --shell /usr/sbin/nologin sshd'
-
-          # Wrapper: SSH login for root drops directly into darling shell
-          # (same Darwin environment the console init sets up).
-          sudo tee rootfs/usr/local/bin/darling-login >/dev/null <<'EOF'
-          #!/bin/sh
-          export DPREFIX=/var/cache/darling/prefix
-          export NO_COLOR=1 CLICOLOR=0
-          unset LS_COLORS LSCOLORS
-          exec /usr/local/bin/darling shell
-          EOF
-          sudo chmod +x rootfs/usr/local/bin/darling-login
-
-          # Point root's login shell at the wrapper so SSH lands in Darwin
-          sudo sed -i 's|^root:\([^:]*:[0-9]*:[0-9]*:[^:]*:[^:]*\):.*|root:\1:/usr/local/bin/darling-login|' rootfs/etc/passwd
 
       - name: Pack squashfs
         run: |
