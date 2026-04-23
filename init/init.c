@@ -39,6 +39,10 @@ static void setup_filesystems(void) {
 	try_mount("proc", "/proc", "proc", 0, NULL);
 	try_mount("sys", "/sys", "sysfs", 0, NULL);
 	try_mount("dev", "/dev", "devtmpfs", 0, NULL);
+	// devpts for pseudo-terminals (ttys), shm for POSIX shared memory —
+	// systemd normally sets these up; we have to ourselves.
+	try_mount("devpts", "/dev/pts", "devpts", 0, "gid=5,mode=620");
+	try_mount("shm", "/dev/shm", "tmpfs", 0, "mode=1777");
 	try_mount("run", "/run", "tmpfs", 0, NULL);
 	try_mount("tmp", "/tmp", "tmpfs", 0, NULL);
 	// Darling's overlayfs workdir is sibling of DPREFIX, so mount tmpfs
