@@ -61,6 +61,63 @@ static void redirect_to_console(void) {
 		(void)close(fd);
 }
 
+// Fork+exec a daemon-style helper. Returns immediately; the child
+// runs and (typically) daemonizes itself.
+static void spawn_detached(const char *path, char *const argv[]) {
+	pid_t pid = fork();
+	if (pid < 0) {
+		say("fork failed for ");
+		say(path);
+		say("\n");
+		return;
+	}
+	if (pid == 0) {
+		execv(path, argv);
+		say("exec failed: ");
+		say(path);
+		say("\n");
+		_exit(127);
+	}
+}
+
+// Bring up loopback and run dhclient on every non-loopback interface.
+// dhclient daemonizes by default, so init doesn't have to babysit it.
+// TODO: migrate to Darwin's configd + ipconfig once they translate
+// network ioctls correctly.
+static void start_networking(void) {
+	char *lo_args[] = {"ip", "link", "set", "lo", "up", NULL};
+	pid_t lo = fork();
+	if (lo == 0) {
+		execv("/usr/sbin/ip", lo_args);
+		_exit(127);
+	}
+	if (lo > 0) waitpid(lo, NULL, 0);
+
+	char *dh_args[] = {"dhclient", "-1", NULL};
+	spawn_detached("/sbin/dhclient", dh_args);
+}
+
+// Generate fresh host keys (the squashfs ships with them removed so
+// every boot gets unique keys) and start sshd. sshd daemonizes by
+// default. TODO: switch to Darwin's openssh in the prefix once the
+// networking syscall translation supports it.
+static void start_sshd(void) {
+	char *keygen_args[] = {"ssh-keygen", "-A", NULL};
+	pid_t k = fork();
+	if (k == 0) {
+		execv("/usr/bin/ssh-keygen", keygen_args);
+		_exit(127);
+	}
+	if (k > 0) waitpid(k, NULL, 0);
+
+	if (mkdir("/run/sshd", 0755) != 0 && errno != EEXIST) {
+		say("mkdir /run/sshd failed\n");
+	}
+
+	char *sshd_args[] = {"sshd", NULL};
+	spawn_detached("/usr/sbin/sshd", sshd_args);
+}
+
 int main(void) {
 	setup_filesystems();
 	redirect_to_console();
@@ -81,6 +138,9 @@ int main(void) {
 	// Default sigmask to allow normal signal handling. PID 1 ignores
 	// most signals by default; we want SIGCHLD delivered.
 	signal(SIGCHLD, SIG_DFL);
+
+	start_networking();
+	start_sshd();
 
 	for (;;) {
 		pid_t pid = fork();
