@@ -119,9 +119,14 @@ static void start_sshd(void) {
 
 	pid_t sp = fork();
 	if (sp == 0) {
-		// stderr → /dev/console so sshd errors are visible on boot
-		int fd = open("/dev/console", O_WRONLY);
+		// stderr → /var/log/xnulinux-sshd.log so it survives console scroll.
+		// Visible from inside darling shell as
+		//   /Volumes/SystemRoot/var/log/xnulinux-sshd.log
+		(void)mkdir("/var/log", 0755);
+		int fd = open("/var/log/xnulinux-sshd.log",
+			      O_WRONLY | O_CREAT | O_APPEND, 0644);
 		if (fd >= 0) {
+			(void)dup2(fd, 1);
 			(void)dup2(fd, 2);
 			if (fd > 2) (void)close(fd);
 		}
