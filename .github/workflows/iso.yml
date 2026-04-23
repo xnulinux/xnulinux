@@ -87,19 +87,10 @@ jobs:
           WantedBy=multi-user.target
           EOF
 
-          # Bring up DHCP via systemd-networkd on any ethernet interface
-          sudo mkdir -p rootfs/etc/systemd/network
-          sudo tee rootfs/etc/systemd/network/20-wired.network >/dev/null <<'EOF'
-          [Match]
-          Name=en* eth*
-          [Network]
-          DHCP=yes
-          EOF
-
+          # No Linux-side networking config: networking will be Darwin's
+          # responsibility (configd / SystemConfiguration) once we get
+          # there. The Linux side stays as thin as possible.
           sudo chroot rootfs systemctl enable darling-launchd.service
-          sudo chroot rootfs systemctl enable systemd-networkd.service
-          sudo chroot rootfs systemctl enable systemd-resolved.service
-          sudo chroot rootfs ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
           sudo chroot rootfs systemctl set-default multi-user.target
           echo "root:root" | sudo chroot rootfs chpasswd
           echo "darwin-linux" | sudo tee rootfs/etc/hostname
