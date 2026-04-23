@@ -26,7 +26,13 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             squashfs-tools xorriso isolinux syslinux-common \
             grub-pc-bin grub-efi-amd64-bin mtools \
-            debootstrap ca-certificates xz-utils
+            debootstrap ca-certificates xz-utils \
+            musl-tools
+
+      - name: Compile xnulinux init
+        run: |
+          musl-gcc -static -O2 -Wall -o init/init init/init.c
+          file init/init
 
       - name: Download darling-headless artifact
         env:
@@ -61,39 +67,14 @@ jobs:
           sudo tar -xJf darling-headless.tar.xz -C rootfs/
           ls -la rootfs/usr/local/bin/darling rootfs/usr/local/bin/darlingserver
 
-      - name: Wire launchd as a system service
+      - name: Replace systemd as PID 1 with xnulinux init
         run: |
-          # Darling's overlayfs workdir is "${DPREFIX}.workdir" (sibling,
-          # see src/startup/darling.c:956). The kernel requires upperdir
-          # and workdir on the same filesystem, so we mount tmpfs at a
-          # parent (/var/cache/darling) and put the prefix inside it. The
-          # live-boot overlay can't be used directly — nested overlay
-          # rules trip it.
-          sudo tee rootfs/etc/systemd/system/darling-launchd.service >/dev/null <<'EOF'
-          [Unit]
-          Description=Darling launchd
-          After=local-fs.target network.target
-          [Service]
-          Type=simple
-          Environment=DPREFIX=/var/cache/darling/prefix
-          ExecStartPre=/bin/mkdir -p /var/cache/darling
-          ExecStartPre=/bin/sh -c 'mountpoint -q /var/cache/darling || mount -t tmpfs tmpfs /var/cache/darling'
-          ExecStartPre=/usr/local/bin/darling shell true
-          ExecStart=/usr/local/bin/darling shell /sbin/launchd
-          Restart=on-failure
-          StandardOutput=journal
-          StandardError=journal
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-
-          # No Linux-side networking config: networking will be Darwin's
-          # responsibility (configd / SystemConfiguration) once we get
-          # there. The Linux side stays as thin as possible.
-          sudo chroot rootfs systemctl enable darling-launchd.service
-          sudo chroot rootfs systemctl set-default multi-user.target
-          echo "root:root" | sudo chroot rootfs chpasswd
+          # Overwrite /sbin/init with our own binary. The systemd files
+          # stay on disk (lots of packages soft-depend on them) but they
+          # never run — the kernel exec()s whatever is at /sbin/init.
+          sudo install -m 0755 init/init rootfs/sbin/init
           echo "darwin-linux" | sudo tee rootfs/etc/hostname
+          echo "root:root" | sudo chroot rootfs chpasswd
 
       - name: Pack squashfs
         run: |
@@ -106,10 +87,10 @@ jobs:
       - name: Write GRUB config
         run: |
           sudo tee iso/boot/grub/grub.cfg >/dev/null <<'EOF'
-          set timeout=3
+          set timeout=1
           set default=0
-          menuentry "Darwin/Linux (live)" {
-            linux  /live/vmlinuz boot=live quiet console=ttyS0 console=tty0
+          menuentry "xnulinux" {
+            linux  /live/vmlinuz boot=live quiet loglevel=3 console=ttyS0 console=tty0
             initrd /live/initrd
           }
           EOF
