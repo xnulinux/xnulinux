@@ -70,6 +70,14 @@ int main(void) {
 	setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin", 1);
 	setenv("TERM", "linux", 1);
 
+	// Console colors (blues/purples from BSD ls, etc.) are unreadable
+	// on the serial console. NO_COLOR is the de-facto standard; CLICOLOR=0
+	// kills BSD ls; clearing LS_COLORS handles GNU-coreutils cases.
+	setenv("NO_COLOR", "1", 1);
+	setenv("CLICOLOR", "0", 1);
+	unsetenv("LS_COLORS");
+	unsetenv("LSCOLORS");
+
 	// Default sigmask to allow normal signal handling. PID 1 ignores
 	// most signals by default; we want SIGCHLD delivered.
 	signal(SIGCHLD, SIG_DFL);
