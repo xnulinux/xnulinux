@@ -163,7 +163,12 @@ int main(void) {
 	signal(SIGCHLD, SIG_DFL);
 
 	start_networking();
-	start_sshd();
+	// Linux sshd is no longer auto-started — we want Darwin's sshd (run
+	// from launchd inside the prefix) to own SSH. Linux sshd is still
+	// installed in the rootfs as a fallback; start it manually with
+	//   chroot /Volumes/SystemRoot /usr/sbin/sshd -D -e
+	// from inside darling shell if you need network access while the
+	// Darwin side isn't working yet.
 
 	for (;;) {
 		pid_t pid = fork();
