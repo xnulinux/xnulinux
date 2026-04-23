@@ -125,7 +125,11 @@ static void start_sshd(void) {
 			(void)dup2(fd, 2);
 			if (fd > 2) (void)close(fd);
 		}
-		char *sshd_args[] = {"sshd", "-D", "-e", NULL};
+		// argv[0] must be the absolute path: sshd re-execs itself for
+		// privilege separation and uses argv[0] for the re-exec; if it's
+		// just the basename, sshd aborts with "re-exec requires execution
+		// with an absolute path".
+		char *sshd_args[] = {"/usr/sbin/sshd", "-D", "-e", NULL};
 		execv("/usr/sbin/sshd", sshd_args);
 		say("exec /usr/sbin/sshd failed\n");
 		_exit(127);
