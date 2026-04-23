@@ -98,9 +98,12 @@ static void start_networking(void) {
 }
 
 // Generate fresh host keys (the squashfs ships with them removed so
-// every boot gets unique keys) and start sshd. sshd daemonizes by
-// default. TODO: switch to Darwin's openssh in the prefix once the
-// networking syscall translation supports it.
+// every boot gets unique keys) and start sshd. We run sshd in the
+// foreground (-D) with logging to stderr (-e), redirecting stderr to
+// /dev/console so any startup failure is visible — the alternative is
+// silent death with no logs, which is what we hit on the first boot.
+// TODO: switch to Darwin's openssh in the prefix once the networking
+// syscall translation supports it.
 static void start_sshd(void) {
 	char *keygen_args[] = {"ssh-keygen", "-A", NULL};
 	pid_t k = fork();
@@ -114,8 +117,19 @@ static void start_sshd(void) {
 		say("mkdir /run/sshd failed\n");
 	}
 
-	char *sshd_args[] = {"sshd", NULL};
-	spawn_detached("/usr/sbin/sshd", sshd_args);
+	pid_t sp = fork();
+	if (sp == 0) {
+		// stderr → /dev/console so sshd errors are visible on boot
+		int fd = open("/dev/console", O_WRONLY);
+		if (fd >= 0) {
+			(void)dup2(fd, 2);
+			if (fd > 2) (void)close(fd);
+		}
+		char *sshd_args[] = {"sshd", "-D", "-e", NULL};
+		execv("/usr/sbin/sshd", sshd_args);
+		say("exec /usr/sbin/sshd failed\n");
+		_exit(127);
+	}
 }
 
 int main(void) {
