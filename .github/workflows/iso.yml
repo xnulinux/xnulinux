@@ -47,11 +47,13 @@ jobs:
 
       - name: Bootstrap minimal Debian rootfs
         run: |
-          # Runtime libs for Darling: fuse, udev, bsd, dbus, xml2, cap, elf
+          # Pinned to bookworm: trixie's t64 transition renamed libfuse2/
+          # libelf1 to libfuse2t64/libelf1t64; bookworm keeps the simpler
+          # names. Debian uses linux-image-amd64, not Ubuntu's *-generic.
           sudo debootstrap --variant=minbase \
-            --include=systemd-sysv,init,linux-image-generic,live-boot,squashfs-tools,ca-certificates,libfuse2,libudev1,libbsd0,libdbus-1-3,libxml2,libcap2,libelf1 \
+            --include=systemd-sysv,init,linux-image-amd64,live-boot,squashfs-tools,ca-certificates,libfuse2,libudev1,libbsd0,libdbus-1-3,libxml2,libcap2 \
             --components=main \
-            stable rootfs http://deb.debian.org/debian
+            bookworm rootfs http://deb.debian.org/debian
 
       - name: Install Darling into rootfs
         run: |
