@@ -93,7 +93,7 @@ jobs:
           set timeout=1
           set default=0
           menuentry "xnulinux" {
-            linux  /live/vmlinuz boot=live quiet loglevel=3 console=ttyS0 console=tty0
+            linux  /live/vmlinuz boot=live console=tty0 console=ttyS0,115200n8
             initrd /live/initrd
           }
           EOF
