@@ -164,7 +164,7 @@ int main(void) {
 				"echo 'KbdInteractiveAuthentication no'; "
 				"cat /etc/ssh/sshd_config; } > /tmp/sshd_config.new && "
 				"mv /tmp/sshd_config.new /etc/ssh/sshd_config\n"
-				"exec /usr/sbin/sshd -d -e -p 2222\n";
+				"exec /usr/sbin/sshd -ddd -e -p 2222\n";
 			const char *script_path = "/tmp/sshd-debug-boot.sh";
 			FILE *f = fopen(script_path, "w");
 			if (!f) {
