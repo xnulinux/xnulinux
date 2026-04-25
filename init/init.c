@@ -152,8 +152,12 @@ int main(void) {
 				"KbdInteractiveAuthentication no\n"
 				"EOF\n"
 				"exec /usr/sbin/sshd -d -e -p 2222\n";
+			// `darling shell` itself prepends `-c` and quote-wraps
+			// extra args before handing them to bash, so we pass
+			// the script as a single positional arg here — adding
+			// our own `-c` would double-wrap it.
 			execl("/usr/local/bin/darling", "darling", "shell",
-			      "-c", boot_script, (char *)NULL);
+			      boot_script, (char *)NULL);
 			say("exec /usr/local/bin/darling failed\n");
 			_exit(127);
 		}
