@@ -167,12 +167,24 @@ int main(void) {
 				"sed -i '' 's/^UsePAM yes/UsePAM no/' /etc/ssh/sshd_config\n"
 				// sshd uses the FIRST value for each keyword, so
 				// prepend our overrides instead of appending.
-				"{ echo 'PermitRootLogin yes'; "
-				"echo 'PasswordAuthentication yes'; "
+				"{ echo 'PermitRootLogin prohibit-password'; "
+				"echo 'PubkeyAuthentication yes'; "
+				"echo 'PasswordAuthentication no'; "
 				"echo 'ChallengeResponseAuthentication no'; "
 				"echo 'KbdInteractiveAuthentication no'; "
 				"cat /etc/ssh/sshd_config; } > /tmp/sshd_config.new && "
 				"mv /tmp/sshd_config.new /etc/ssh/sshd_config\n"
+				// Apple's crypt() is DES-only (no SHA-512 $6$),
+				// so the password hash baked into master.passwd
+				// can't be matched. Use pubkey auth: drop the
+				// developer's id_ed25519.pub into root's
+				// authorized_keys so they can ssh in directly.
+				"mkdir -p /var/root/.ssh\n"
+				"chmod 700 /var/root/.ssh\n"
+				"cat > /var/root/.ssh/authorized_keys <<'EOF'\n"
+				"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVGr9MD8yEx1OFqkh8tu+KytxVrcMA1V2lXkycz0tGh jmaloney@Josephs-Mini.home.local\n"
+				"EOF\n"
+				"chmod 600 /var/root/.ssh/authorized_keys\n"
 				"exec /usr/sbin/sshd -ddd -e -p 2222\n";
 			const char *script_path = "/tmp/sshd-debug-boot.sh";
 			FILE *f = fopen(script_path, "w");
