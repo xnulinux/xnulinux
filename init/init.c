@@ -141,7 +141,15 @@ int main(void) {
 			// connection attempt always gets a fresh sshd. This is a
 			// debugging configuration; switch to the launchd path
 			// once sshd is reliable.
+			//
+			// Multi-line script lives in a file because `darling
+			// shell` quote-wraps every extra arg before handing it
+			// to bash — collapsing a multi-line C string into a
+			// single quoted word that bash would try to exec as a
+			// literal filename. Linux /tmp is visible inside the
+			// Darling prefix at /Volumes/SystemRoot/tmp.
 			static const char boot_script[] =
+				"#!/bin/bash\n"
 				"set -e\n"
 				"ssh-keygen -A 2>&1\n"
 				"sed -i 's/^UsePAM yes/UsePAM no/' /etc/ssh/sshd_config\n"
@@ -152,12 +160,18 @@ int main(void) {
 				"KbdInteractiveAuthentication no\n"
 				"EOF\n"
 				"exec /usr/sbin/sshd -d -e -p 2222\n";
-			// `darling shell` itself prepends `-c` and quote-wraps
-			// extra args before handing them to bash, so we pass
-			// the script as a single positional arg here — adding
-			// our own `-c` would double-wrap it.
+			const char *script_path = "/tmp/sshd-debug-boot.sh";
+			FILE *f = fopen(script_path, "w");
+			if (!f) {
+				say("failed to open boot script for write\n");
+				_exit(127);
+			}
+			fputs(boot_script, f);
+			fclose(f);
+			chmod(script_path, 0755);
 			execl("/usr/local/bin/darling", "darling", "shell",
-			      boot_script, (char *)NULL);
+			      "/Volumes/SystemRoot/tmp/sshd-debug-boot.sh",
+			      (char *)NULL);
 			say("exec /usr/local/bin/darling failed\n");
 			_exit(127);
 		}
