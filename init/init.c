@@ -36,6 +36,15 @@ static void try_mount(const char *src, const char *tgt, const char *fs,
 }
 
 static void setup_filesystems(void) {
+	// Apple's sshd privsep child chroots to /var/empty. Darling's
+	// sys_chroot does not vchroot_expand its path argument, so it
+	// hits Linux's chroot syscall against /var/empty on the Linux
+	// rootfs (not the prefix). The debootstrap'd rootfs doesn't ship
+	// /var/empty, so the chroot fails ENOENT and the connection is
+	// reset. Pre-create the directory at PID 1 before anything else.
+	if (mkdir("/var/empty", 0755) != 0 && errno != EEXIST)
+		say("mkdir /var/empty failed\n");
+
 	try_mount("proc", "/proc", "proc", 0, NULL);
 	try_mount("sys", "/sys", "sysfs", 0, NULL);
 	try_mount("dev", "/dev", "devtmpfs", 0, NULL);
