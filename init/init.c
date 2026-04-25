@@ -152,13 +152,18 @@ int main(void) {
 				"#!/bin/bash\n"
 				"set -e\n"
 				"ssh-keygen -A 2>&1\n"
-				"sed -i 's/^UsePAM yes/UsePAM no/' /etc/ssh/sshd_config\n"
-				"cat >> /etc/ssh/sshd_config <<'EOF'\n"
-				"PermitRootLogin yes\n"
-				"PasswordAuthentication yes\n"
-				"ChallengeResponseAuthentication no\n"
-				"KbdInteractiveAuthentication no\n"
-				"EOF\n"
+				// Apple/BSD sed requires an explicit backup
+				// extension after -i (empty string disables
+				// backup); GNU sed treats -i as standalone.
+				"sed -i '' 's/^UsePAM yes/UsePAM no/' /etc/ssh/sshd_config\n"
+				// sshd uses the FIRST value for each keyword, so
+				// prepend our overrides instead of appending.
+				"{ echo 'PermitRootLogin yes'; "
+				"echo 'PasswordAuthentication yes'; "
+				"echo 'ChallengeResponseAuthentication no'; "
+				"echo 'KbdInteractiveAuthentication no'; "
+				"cat /etc/ssh/sshd_config; } > /tmp/sshd_config.new && "
+				"mv /tmp/sshd_config.new /etc/ssh/sshd_config\n"
 				"exec /usr/sbin/sshd -d -e -p 2222\n";
 			const char *script_path = "/tmp/sshd-debug-boot.sh";
 			FILE *f = fopen(script_path, "w");
