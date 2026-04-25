@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause
 //
 // xnulinux init: minimal PID 1 that mounts the bare filesystems Darling
-// needs, configures sshd, hands sshd to launchd, and execs an interactive
-// `darling shell` on /dev/console. Reaps zombies (PID 1's job) and
-// restarts darling if it exits.
+// needs and execs `darling shell` on the system console. Reaps zombies
+// (PID 1's job). Restarts darling if it exits.
 
 #define _GNU_SOURCE
 #include <errno.h>
@@ -37,6 +36,15 @@ static void try_mount(const char *src, const char *tgt, const char *fs,
 }
 
 static void setup_filesystems(void) {
+	// Apple's sshd privsep child chroots to /var/empty. Darling's
+	// sys_chroot does not vchroot_expand its path argument, so it
+	// hits Linux's chroot syscall against /var/empty on the Linux
+	// rootfs (not the prefix). The debootstrap'd rootfs doesn't ship
+	// /var/empty, so the chroot fails ENOENT and the connection is
+	// reset. Pre-create the directory at PID 1 before anything else.
+	if (mkdir("/var/empty", 0755) != 0 && errno != EEXIST)
+		say("mkdir /var/empty failed\n");
+
 	try_mount("proc", "/proc", "proc", 0, NULL);
 	try_mount("sys", "/sys", "sysfs", 0, NULL);
 	try_mount("dev", "/dev", "devtmpfs", 0, NULL);
@@ -98,71 +106,6 @@ static void start_networking(void) {
 	spawn_detached("/sbin/dhclient", dh_args);
 }
 
-// One-time per boot: drop a setup script into /tmp and run it inside the
-// Darling prefix. The script edits sshd_config, installs root's
-// authorized_keys, and hands sshd to launchd in inetd-on-demand mode on
-// port 22. After this returns, sshd is supervised by launchd and accepts
-// connections without any further help from init.c.
-static void setup_sshd_via_launchd(void) {
-	static const char setup_script[] =
-		"#!/bin/bash\n"
-		"set -e\n"
-		// sshd uses the FIRST value seen for each keyword, so prepend
-		// our overrides rather than appending.
-		"{ echo 'PermitRootLogin prohibit-password'; "
-		"echo 'PubkeyAuthentication yes'; "
-		"echo 'PasswordAuthentication no'; "
-		"echo 'ChallengeResponseAuthentication no'; "
-		"echo 'KbdInteractiveAuthentication no'; "
-		"cat /etc/ssh/sshd_config; } > /tmp/sshd_config.new && "
-		"mv /tmp/sshd_config.new /etc/ssh/sshd_config\n"
-		// Apple/BSD sed: -i needs an explicit backup extension.
-		"sed -i '' 's/^UsePAM yes/UsePAM no/' /etc/ssh/sshd_config\n"
-		// Apple's crypt() is DES-only and can't match the $6$ hash
-		// that setupPrefix bakes into master.passwd, so password auth
-		// is unusable. Pubkey only.
-		"mkdir -p /var/root/.ssh\n"
-		"chmod 700 /var/root/.ssh\n"
-		"cat > /var/root/.ssh/authorized_keys <<'EOF'\n"
-		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVGr9MD8yEx1OFqkh8tu+KytxVrcMA1V2lXkycz0tGh jmaloney@Josephs-Mini.home.local\n"
-		"EOF\n"
-		"chmod 600 /var/root/.ssh/authorized_keys\n"
-		// -w writes Disabled=false to launchd's overrides.plist (the
-		// dir was pre-created by setupPrefix). sshd-keygen-wrapper
-		// generates host keys lazily on the first connection.
-		"launchctl load -w /System/Library/LaunchDaemons/ssh.plist\n";
-
-	const char *script_path = "/tmp/xnulinux-sshd-setup.sh";
-	FILE *f = fopen(script_path, "w");
-	if (!f) {
-		say("failed to write sshd setup script\n");
-		return;
-	}
-	fputs(setup_script, f);
-	fclose(f);
-	chmod(script_path, 0755);
-
-	pid_t pid = fork();
-	if (pid < 0) {
-		say("fork failed for sshd setup\n");
-		return;
-	}
-	if (pid == 0) {
-		// `darling shell` quote-wraps extra args before bash -c, which
-		// would collapse a multi-line C string into one quoted word.
-		// Pass the script's path (visible inside the prefix at
-		// /Volumes/SystemRoot/tmp/...) and let bash exec it.
-		execl("/usr/local/bin/darling", "darling", "shell",
-		      "/Volumes/SystemRoot/tmp/xnulinux-sshd-setup.sh",
-		      (char *)NULL);
-		_exit(127);
-	}
-
-	int status;
-	while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
-		continue;
-}
-
 int main(void) {
 	setup_filesystems();
 	redirect_to_console();
@@ -185,14 +128,9 @@ int main(void) {
 	signal(SIGCHLD, SIG_DFL);
 
 	start_networking();
+	// SSH is owned by Darwin (Apple's sshd via launchd inside the
+	// Darling prefix). The Linux side ships no sshd at all.
 
-	// First darling-shell invocation: bring up the prefix, configure
-	// sshd, hand it to launchd. Runs once and returns.
-	setup_sshd_via_launchd();
-
-	// Second darling-shell invocation: foreground interactive bash on
-	// /dev/console for the operator. Restart-on-exit so an accidental
-	// ^D doesn't leave the VM with no console to type at.
 	for (;;) {
 		pid_t pid = fork();
 		if (pid < 0) {
@@ -202,7 +140,63 @@ int main(void) {
 		}
 
 		if (pid == 0) {
+			// Child: enter Darling and immediately bring sshd up in
+			// foreground debug mode. -e routes its log to stderr →
+			// /dev/console = ttyS0 → captured in the host's serial
+			// file. From the host:
+			//     ssh -v -p 2222 root@<vm-ip>      (password: root)
+			// sshd's -d makes it handle one connection then exit;
+			// the outer init loop restarts darling so the next
+			// connection attempt always gets a fresh sshd. This is a
+			// debugging configuration; switch to the launchd path
+			// once sshd is reliable.
+			//
+			// Multi-line script lives in a file because `darling
+			// shell` quote-wraps every extra arg before handing it
+			// to bash — collapsing a multi-line C string into a
+			// single quoted word that bash would try to exec as a
+			// literal filename. Linux /tmp is visible inside the
+			// Darling prefix at /Volumes/SystemRoot/tmp.
+			static const char boot_script[] =
+				"#!/bin/bash\n"
+				"set -e\n"
+				"ssh-keygen -A 2>&1\n"
+				// Apple/BSD sed requires an explicit backup
+				// extension after -i (empty string disables
+				// backup); GNU sed treats -i as standalone.
+				"sed -i '' 's/^UsePAM yes/UsePAM no/' /etc/ssh/sshd_config\n"
+				// sshd uses the FIRST value for each keyword, so
+				// prepend our overrides instead of appending.
+				"{ echo 'PermitRootLogin prohibit-password'; "
+				"echo 'PubkeyAuthentication yes'; "
+				"echo 'PasswordAuthentication no'; "
+				"echo 'ChallengeResponseAuthentication no'; "
+				"echo 'KbdInteractiveAuthentication no'; "
+				"cat /etc/ssh/sshd_config; } > /tmp/sshd_config.new && "
+				"mv /tmp/sshd_config.new /etc/ssh/sshd_config\n"
+				// Apple's crypt() is DES-only (no SHA-512 $6$),
+				// so the password hash baked into master.passwd
+				// can't be matched. Use pubkey auth: drop the
+				// developer's id_ed25519.pub into root's
+				// authorized_keys so they can ssh in directly.
+				"mkdir -p /var/root/.ssh\n"
+				"chmod 700 /var/root/.ssh\n"
+				"cat > /var/root/.ssh/authorized_keys <<'EOF'\n"
+				"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVGr9MD8yEx1OFqkh8tu+KytxVrcMA1V2lXkycz0tGh jmaloney@Josephs-Mini.home.local\n"
+				"EOF\n"
+				"chmod 600 /var/root/.ssh/authorized_keys\n"
+				"exec /usr/sbin/sshd -ddd -e -p 2222\n";
+			const char *script_path = "/tmp/sshd-debug-boot.sh";
+			FILE *f = fopen(script_path, "w");
+			if (!f) {
+				say("failed to open boot script for write\n");
+				_exit(127);
+			}
+			fputs(boot_script, f);
+			fclose(f);
+			chmod(script_path, 0755);
 			execl("/usr/local/bin/darling", "darling", "shell",
+			      "/Volumes/SystemRoot/tmp/sshd-debug-boot.sh",
 			      (char *)NULL);
 			say("exec /usr/local/bin/darling failed\n");
 			_exit(127);
