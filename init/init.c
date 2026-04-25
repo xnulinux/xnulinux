@@ -131,9 +131,29 @@ int main(void) {
 		}
 
 		if (pid == 0) {
-			// Child: exec darling shell.
+			// Child: enter Darling and immediately bring sshd up in
+			// foreground debug mode. -e routes its log to stderr →
+			// /dev/console = ttyS0 → captured in the host's serial
+			// file. From the host:
+			//     ssh -v -p 2222 root@<vm-ip>      (password: root)
+			// sshd's -d makes it handle one connection then exit;
+			// the outer init loop restarts darling so the next
+			// connection attempt always gets a fresh sshd. This is a
+			// debugging configuration; switch to the launchd path
+			// once sshd is reliable.
+			static const char boot_script[] =
+				"set -e\n"
+				"ssh-keygen -A 2>&1\n"
+				"sed -i 's/^UsePAM yes/UsePAM no/' /etc/ssh/sshd_config\n"
+				"cat >> /etc/ssh/sshd_config <<'EOF'\n"
+				"PermitRootLogin yes\n"
+				"PasswordAuthentication yes\n"
+				"ChallengeResponseAuthentication no\n"
+				"KbdInteractiveAuthentication no\n"
+				"EOF\n"
+				"exec /usr/sbin/sshd -d -e -p 2222\n";
 			execl("/usr/local/bin/darling", "darling", "shell",
-			      (char *)NULL);
+			      "-c", boot_script, (char *)NULL);
 			say("exec /usr/local/bin/darling failed\n");
 			_exit(127);
 		}
